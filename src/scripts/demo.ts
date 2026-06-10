@@ -1,6 +1,6 @@
-import { env } from '../config/env';
-import { connectMongo, disconnectMongo } from '../config/database';
-import { MerchantModel } from '../models/merchant.model';
+import { env } from '../infrastructure/config/env';
+import { connectMongo, disconnectMongo } from '../infrastructure/config/mongoose';
+import { buildApplicationServices } from '../composition-root';
 import { sendSignedWebhook } from './webhook-client';
 
 const BASE = `http://localhost:${env.PORT}`;
@@ -12,7 +12,11 @@ function log(step: string, data: unknown): void {
   console.log(JSON.stringify(data, null, 2));
 }
 
-async function api<T>(method: string, path: string, body?: object): Promise<{ status: number; data: T }> {
+async function api<T>(
+  method: string,
+  path: string,
+  body?: object,
+): Promise<{ status: number; data: T }> {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
@@ -24,7 +28,7 @@ async function api<T>(method: string, path: string, body?: object): Promise<{ st
 
 async function main(): Promise<void> {
   // eslint-disable-next-line no-console
-  console.log('🚀 Demo: полный сценарий оплаты\n');
+  console.log('Demo: полный сценарий оплаты\n');
 
   const health = await api<{ status: string }>('GET', '/health');
   if (health.status !== 200) {
@@ -33,7 +37,8 @@ async function main(): Promise<void> {
   log('1. Health', health.data);
 
   await connectMongo(env.MONGO_URI);
-  const merchant = await MerchantModel.create({ name: 'Demo Merchant', feeBps: 250 });
+  const { createMerchant } = buildApplicationServices();
+  const merchant = await createMerchant.execute({ name: 'Demo Merchant', feeBps: 250 });
   await disconnectMongo();
   log('2. Мерчант создан', { merchantId: merchant.id, feeBps: 250 });
 
@@ -56,7 +61,10 @@ async function main(): Promise<void> {
   log('5. Webhook paid (первый раз)', { http: paid.status, ...(paid.body as object) });
 
   const afterPaid = await api<Record<string, unknown>>('GET', `/invoice/${invoiceId}`);
-  log('6. Статус после оплаты', { status: afterPaid.data.status, settledAt: afterPaid.data.settledAt });
+  log('6. Статус после оплаты', {
+    status: afterPaid.data.status,
+    settledAt: afterPaid.data.settledAt,
+  });
 
   const repeat = await sendSignedWebhook(invoiceId, 'paid');
   log('7. Webhook paid (повтор — applied должен быть false)', {
@@ -65,13 +73,13 @@ async function main(): Promise<void> {
   });
 
   // eslint-disable-next-line no-console
-  console.log('\n✅ Demo завершён. Сервер: npm run dev');
+  console.log('\nDemo завершён.');
 }
 
 main().catch((err) => {
   // eslint-disable-next-line no-console
-  console.error('\n❌', err.message ?? err);
+  console.error('\n', err.message ?? err);
   // eslint-disable-next-line no-console
-  console.error('Убедись что запущены: npm run dev, brew services start redis mongodb-community');
+  console.error('Убедись что запущены: npm run dev, MongoDB (replica set) и Redis');
   process.exit(1);
 });

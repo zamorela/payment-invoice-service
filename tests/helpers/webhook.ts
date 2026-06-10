@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { buildSignaturePayload } from '../../src/webhook/signature';
+import { buildSignaturePayload } from '../../src/interfaces/http/webhook/signature';
 
 export interface SignedWebhook {
   body: string;

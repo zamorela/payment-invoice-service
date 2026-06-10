@@ -1,12 +1,11 @@
 import request from 'supertest';
-import { createApp } from '../../src/app';
-import { MerchantModel } from '../../src/models/merchant.model';
+import { buildTestApp } from '../helpers/app';
+import { MerchantModel } from '../../src/infrastructure/persistence/merchant.schema';
 
-const app = createApp();
+const { app } = buildTestApp();
 
 async function seedMerchant(feeBps = 250) {
-  const merchant = await MerchantModel.create({ name: 'Acme', feeBps });
-  return merchant;
+  return MerchantModel.create({ name: 'Acme', feeBps });
 }
 
 describe('POST /invoice', () => {
@@ -65,9 +64,7 @@ describe('GET /invoice/:id', () => {
       .send({ amount: 5_000, currency: 'EUR', merchantId: merchant.id })
       .expect(201);
 
-    const res = await request(app)
-      .get(`/invoice/${created.body.invoiceId}`)
-      .expect(200);
+    const res = await request(app).get(`/invoice/${created.body.invoiceId}`).expect(200);
 
     expect(res.body.invoiceId).toBe(created.body.invoiceId);
     expect(res.body.status).toBe('pending');

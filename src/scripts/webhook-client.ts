@@ -1,6 +1,6 @@
 import crypto from 'crypto';
-import { env } from '../config/env';
-import { buildSignaturePayload } from '../webhook/signature';
+import { env } from '../infrastructure/config/env';
+import { buildSignaturePayload } from '../interfaces/http/webhook/signature';
 
 export type WebhookStatus = 'paid' | 'failed';
 

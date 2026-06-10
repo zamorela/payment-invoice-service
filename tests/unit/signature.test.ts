@@ -2,7 +2,7 @@ import {
   buildSignaturePayload,
   computeSignature,
   verifySignature,
-} from '../../src/webhook/signature';
+} from '../../src/interfaces/http/webhook/signature';
 
 const SECRET = 'test-webhook-secret';
 

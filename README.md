@@ -13,21 +13,54 @@
 - **TypeScript**
 - **Jest + Supertest** — тесты
 
-## Структура проекта
+## Архитектура
+
+Проект построен по **Clean Architecture / DDD**: зависимости направлены только
+внутрь (Dependency Rule), домен ничего не знает про Express, Mongoose и Redis.
 
 ```
 src/
-  config/      настройки, подключение к Mongo и Redis
-  models/      Merchant, Invoice
-  utils/       деньги, ошибки
-  invoice/     создание и получение счетов
-  webhook/     подпись, nonce, обработка статуса
-  scripts/     seed, demo, отправка webhook вручную
-tests/         unit + integration
+  domain/          ядро. Сущности и value objects, БЕЗ внешних зависимостей
+    shared/        Money, Currency, доменные ошибки
+    invoice/       агрегат Invoice, FeePolicy, порт InvoiceRepository
+    merchant/      Merchant, порт MerchantRepository
+  application/     use cases (бизнес-сценарии) и порты инфраструктуры
+    invoice/       CreateInvoice, GetInvoice
+    webhook/       ProcessWebhook
+    ports/         NonceStore, UnitOfWork
+  infrastructure/  реализации портов (детали)
+    persistence/   Mongoose-схемы, мапперы, репозитории, Unit of Work
+    redis/         RedisNonceStore
+    config/        env, подключения Mongo и Redis
+  interfaces/      входной слой
+    http/          контроллеры, роуты, middleware, DTO, подпись, обработчик ошибок
+  composition-root.ts   единственное место сборки зависимостей (ручной DI)
+  server.ts        bootstrap
+tests/             unit (домен, подпись) + integration (HTTP)
 ```
 
-Код разложен по слоям: `routes → middleware → controller → service → model`.
-Бизнес-логика — в сервисах, контроллеры тонкие.
+Поток запроса: `http (interface) → use case (application) → entity + repository port
+(domain) → mongoose/redis adapter (infrastructure)`.
+
+Ключевые приёмы:
+
+- **Сущности с поведением.** `Invoice.markPaid()` инкапсулирует инвариант
+  (переход только из `pending`), а не «анемичная» модель.
+- **Value objects.** Деньги — это `Money` (целые минорные единицы + валюта),
+  а не «голый» `number`; нельзя случайно сложить разные валюты.
+- **Порты и адаптеры.** Use cases зависят от интерфейсов (`InvoiceRepository`,
+  `NonceStore`, `UnitOfWork`), реализации Mongoose/Redis подключаются снаружи.
+- **Domain service.** `SettlementService` координирует финализацию счёта и
+  зачисление мерчанту; use case только управляет транзакцией.
+- **Composition root + DI.** Use cases связываются в одной точке без HTTP;
+  wiring middleware — в `server.ts`. Зависимости слоёв проверяются
+  `npm run lint:deps` (dependency-cruiser).
+
+> Это **Clean Architecture + DDD** для сервиса такого размера: слои разделены,
+> зависимости проверяются (`npm run lint:deps`), id генерируется через порт
+> `IdGenerator`, settlement — через доменный `SettlementService`, мерчант
+> зачисляет через `credit()`. Composition root не знает про HTTP; scripts
+> используют use cases, как и API.
 
 ## Как запустить
 
@@ -157,12 +190,12 @@ MongoDB поднимается автоматически через `mongodb-me
 
 ### Деньги
 
-Все суммы хранятся как **целые числа в копейках/центах** — без float, без
-сюрпризов с округлением.
+Деньги — это value object `Money` (целые минорные единицы + валюта), а не
+«голый» `number`: нельзя потерять точность на float или случайно смешать валюты.
 
-Комиссия мерчанта — в базисных пунктах (`feeBps`): 2.5% = 250 bps.
-Формула: `fee = round(amount × feeBps / 10000)`, считается через BigInt.
-Округление — «половина вверх», в пользу платформы.
+Комиссия — value object `FeePolicy` в базисных пунктах (`feeBps`): 2.5% = 250 bps.
+Формула: `fee = round(amount × feeBps / 10000)`, считается через BigInt, округление
+«половина вверх» в пользу платформы. `amount` ограничен `Number.MAX_SAFE_INTEGER`.
 
 ### Безопасность webhook
 
@@ -178,11 +211,15 @@ Nonce резервируется только после проверки под
 
 ### Зачисление ровно один раз
 
-Статус счёта меняется только если он `pending` — это compare-and-swap через
-`findOneAndUpdate`. Среди параллельных webhook «выигрывает» ровно один.
+Переход в финальный статус — это инвариант агрегата `Invoice` (только из
+`pending`). Сохранение использует **оптимистичную блокировку по `version`**:
+среди параллельных webhook «выигрывает» ровно один, остальные получают конфликт
+записи, транзакция откатывается и при повторном чтении счёт уже не `pending` →
+`applied: false`.
 
-Смена статуса и пополнение баланса мерчанта — **в одной MongoDB-транзакции**.
-Если что-то упало посередине, откатывается всё. Поэтому нужен replica set.
+Смена статуса и пополнение баланса мерчанта идут **в одной транзакции**
+(`UnitOfWork`). Если упало посередине — откатывается всё, состояния «paid, но
+баланс не пополнен» не существует. Поэтому нужен replica set.
 
 ## Допущения
 
@@ -199,4 +236,5 @@ Nonce резервируется только после проверки под
 
 - **Ledger** (double-entry) вместо `$inc` на поле `balance` — нормальный аудит.
 - **Идемпотентные ответы** на повтор webhook — возвращать тот же результат.
+- **DI-контейнер** вместо ручного composition root, если число зависимостей вырастет.
 - **Rate limiting**, структурные логи (pino), OpenAPI-спека.

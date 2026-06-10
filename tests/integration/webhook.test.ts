@@ -1,11 +1,11 @@
 import request from 'supertest';
-import { createApp } from '../../src/app';
-import { MerchantModel } from '../../src/models/merchant.model';
-import { InvoiceModel } from '../../src/models/invoice.model';
+import { buildTestApp, TEST_WEBHOOK_SECRET as SECRET } from '../helpers/app';
+import { MongooseMerchantRepository } from '../../src/infrastructure/persistence/mongoose-merchant.repository';
+import { MerchantModel } from '../../src/infrastructure/persistence/merchant.schema';
+import { InvoiceModel } from '../../src/infrastructure/persistence/invoice.schema';
 import { signWebhook } from '../helpers/webhook';
 
-const SECRET = 'test-webhook-secret';
-const app = createApp();
+const { app } = buildTestApp();
 
 async function createPendingInvoice(amount = 10_000, feeBps = 250) {
   const merchant = await MerchantModel.create({ name: 'Acme', feeBps });
@@ -86,7 +86,6 @@ describe('POST /webhook — идемпотентность зачисления'
     const first = signWebhook({ payload: { invoiceId, status: 'paid' }, secret: SECRET });
     await request(app).post('/webhook').set(first.headers).send(first.body).expect(200);
 
-    // легитимный ретрай платёжной системы: тот же счёт, но новый nonce/подпись
     const second = signWebhook({ payload: { invoiceId, status: 'paid' }, secret: SECRET });
     const res = await request(app)
       .post('/webhook')
@@ -167,7 +166,6 @@ describe('POST /webhook — валидация и ошибки', () => {
     const { merchant, invoiceId } = await createPendingInvoice();
     const signed = signWebhook({ payload: { invoiceId, status: 'paid' }, secret: SECRET });
 
-    // Заголовки подписаны под paid, а тело подменено на failed.
     await request(app)
       .post('/webhook')
       .set(signed.headers)
@@ -204,7 +202,7 @@ describe('POST /webhook — атомарность транзакции', () => 
     const { merchant, invoiceId } = await createPendingInvoice();
 
     const spy = jest
-      .spyOn(MerchantModel, 'updateOne')
+      .spyOn(MongooseMerchantRepository.prototype, 'applyCredit')
       .mockRejectedValue(new Error('simulated db failure'));
 
     const signed = signWebhook({ payload: { invoiceId, status: 'paid' }, secret: SECRET });
